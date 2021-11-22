@@ -196,9 +196,22 @@ in
   Time.+ (#usr times, #sys times)
 end
 
-fun main () =
+fun main_interpret_o0 prog =
     let
-        val prog = hd (CommandLine.arguments ())
+        (* val inp = TextIO.inputAll TextIO.stdIn *)
+        val inp = TextIO.inputAll (TextIO.openIn prog)
+        val tokens = (lex (0,0) (explode inp))
+        val ast = parse tokens
+        (* val optimized_ast = ast_optimize_loop optimized_reps *)
+        val cells = Array.array (100000, 0)
+        (* val interpret_ = interpret optimized_ast 0 *)
+        val interpret_ = interpret ast 0
+    in
+        print ("interpret -O0 takes " ^ Time.toString (time_it (interpret_, cells)) ^ " seconds.\n")
+    end
+
+fun main_interpret prog =
+    let
         (* val inp = TextIO.inputAll TextIO.stdIn *)
         val inp = TextIO.inputAll (TextIO.openIn prog)
         val tokens = (lex (0,0) (explode inp))
@@ -212,17 +225,20 @@ fun main () =
         print ("interpret takes " ^ Time.toString (time_it (interpret_, cells)) ^ " seconds.\n")
     end
 
-(* fun main () = *)
-(*     let *)
-(*         val prog = hd (CommandLine.arguments ()) *)
-(*         (* val inp = TextIO.inputAll TextIO.stdIn *) *)
-(*         val inp = TextIO.inputAll (TextIO.openIn prog) *)
-(*         val tokens = (lex (0,0) (explode inp)) *)
-(*         val ast = parse tokens *)
-(*         val optimized_reps = ast_combine_repeated ast *)
-(*         val optimized_ast = ast_optimize_loop optimized_reps *)
-(*     in *)
-(*         print (transpile_to_c optimized_ast) *)
-(*     end *)
+fun main_compile prog =
+    let
+        val inp = TextIO.inputAll (TextIO.openIn prog)
+        val tokens = (lex (0,0) (explode inp))
+        val ast = parse tokens
+        val optimized_reps = ast_combine_repeated ast
+    in
+        print (transpile_to_c optimized_reps)
+    end
 
-val _ = main ()
+fun main ("-c"::prog::nil) = main_compile prog
+  | main ("-O0"::"-i"::prog::nil) = main_interpret_o0 prog
+  | main ("-O1"::"-i"::prog::nil) = main_interpret prog
+  | main ("-i"::prog::nil) = main_interpret prog
+  | main _ = print ("Usage: intrp ([-O0|-O1] -i | -c) <file>\n\n" ^ "-c  outputs C code\n" ^ "-O0 disables optimizations (applicable to interpreter)\n" ^ "-O1 enables optimizations (applicable to interpreter, enabled by default)\n" ^ "-i  interprets the code directly\n")
+
+val _ = main (CommandLine.arguments ())
