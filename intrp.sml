@@ -61,6 +61,12 @@ and parse_loop lbegin acc nil = raise SyntaxError ("Missing TLoopEnd for loop st
   | parse_loop lbegin acc (TLoopEnd lc :: ts) = (Loop acc, ts)
   | parse_loop lbegin acc (t :: ts) = parse_loop lbegin (acc @ [parse_single t]) ts
 
+fun ptroffset n =
+  if n < 0 then
+      DecPtr (~n)
+  else
+      IncPtr n
+
 (* Combine repeated commands: [Inc 1, Inc 1, Inc 1] => [Inc 3] *)
 fun ast_combine_repeated nil = nil
     | ast_combine_repeated (IncPtr n1 :: IncPtr n2 :: ns) = ast_combine_repeated (IncPtr (n1 + n2) :: ns)
@@ -83,21 +89,26 @@ fun ast_combine_repeated nil = nil
     | ast_combine_repeated (Loop l :: ns) = Loop (ast_combine_repeated l) :: ast_combine_repeated ns
     | ast_combine_repeated (n :: ns) = n :: ast_combine_repeated ns
 
-fun ptroffset n =
-  if n < 0 then
-      DecPtr n
-  else
-      IncPtr n
 
-(* fun ast_optimize_loop nil = nil *)
-(*   | ast_optimize_loop (IncPtr n1 :: Inc n2 :: DecPtr n3 :: ns) = IncPtrOffset (n1, n2) :: ptroffset (n1-n3) :: ast_optimize_loop ns *)
-(*   | ast_optimize_loop (DecPtr n1 :: Inc n2 :: IncPtr n3 :: ns) = IncPtrOffset (~n1, n2) :: ptroffset (n3-n1) :: ast_optimize_loop ns *)
+fun ast_optimize_loop nil = nil
+  | ast_optimize_loop (IncPtr n1 :: Inc n2 :: DecPtr n3 :: ns) = IncPtrOffset (n1, n2) :: ptroffset (n1-n3) :: ast_optimize_loop ns
+  | ast_optimize_loop (DecPtr n1 :: Inc n2 :: IncPtr n3 :: ns) = IncPtrOffset (~n1, n2) :: ptroffset (n3-n1) :: ast_optimize_loop ns
 
-(*   | ast_optimize_loop (IncPtr n1 :: Dec n2 :: DecPtr n3 :: ns) = DecPtrOffset (n1, n2) :: ptroffset (n1-n3) :: ast_optimize_loop ns *)
-(*   | ast_optimize_loop (DecPtr n1 :: Dec n2 :: IncPtr n3 :: ns) = DecPtrOffset (~n1, n2) :: ptroffset (n3-n1) :: ast_optimize_loop ns *)
+  | ast_optimize_loop (IncPtr n1 :: Dec n2 :: DecPtr n3 :: ns) = DecPtrOffset (n1, n2) :: ptroffset (n1-n3) :: ast_optimize_loop ns
+  | ast_optimize_loop (DecPtr n1 :: Dec n2 :: IncPtr n3 :: ns) = DecPtrOffset (~n1, n2) :: ptroffset (n3-n1) :: ast_optimize_loop ns
 
-(*   | ast_optimize_loop (Loop l :: ns) = Loop (ast_optimize_loop l) :: ast_optimize_loop ns *)
-(*   | ast_optimize_loop (n :: ns) = n :: ast_optimize_loop ns *)
+  | ast_optimize_loop (Loop l :: ns) = Loop (ast_optimize_loop l) :: ast_optimize_loop ns
+  | ast_optimize_loop (n :: ns) = n :: ast_optimize_loop ns
+
+fun ast_remove_noops nil = nil
+  | ast_remove_noops (DecPtrOffset (_, 0) :: ns) = ast_remove_noops ns
+  | ast_remove_noops (IncPtrOffset (_, 0) :: ns) = ast_remove_noops ns
+  | ast_remove_noops (IncPtr 0 :: ns) = ast_remove_noops ns
+  | ast_remove_noops (DecPtr 0 :: ns) = ast_remove_noops ns
+  | ast_remove_noops (Dec 0 :: ns) = ast_remove_noops ns
+  | ast_remove_noops (Inc 0 :: ns) = ast_remove_noops ns
+  | ast_remove_noops (Loop nil :: ns) = ast_remove_noops ns
+  | ast_remove_noops (n :: ns) = n :: ast_remove_noops ns
 
 exception InterpreterError of string
 
@@ -122,10 +133,16 @@ and concatstrs nil = ""
   | concatstrs (s :: nil) = s
   | concatstrs (s :: s') = s ^ concatstrs s'
 
+and int_to_cexpr n =
+    (if n < 0 then
+        "-" ^ (Int.toString (~n))
+    else
+        Int.toString n)
+
 and cexpr left optindex assign_op right =
     (case optindex of
-         SOME (index:int) => left ^ "[" ^ (Int.toString index) ^ "]"
-      | NONE => left) ^ assign_op ^ (Int.toString right) ^ ";"
+         SOME (index:int) => left ^ "[" ^ (int_to_cexpr index) ^ "]"
+      | NONE => left) ^ assign_op ^ (int_to_cexpr right) ^ ";"
 
 and repeatstr str 0 = ""
   | repeatstr str n = str ^ (repeatstr str (n - 1))
@@ -196,6 +213,9 @@ in
   Time.+ (#usr times, #sys times)
 end
 
+
+fun optimize_full ast = (ast_remove_noops (ast_optimize_loop (ast_combine_repeated ast)))
+
 fun main_interpret_o0 prog =
     let
         (* val inp = TextIO.inputAll TextIO.stdIn *)
@@ -216,11 +236,10 @@ fun main_interpret prog =
         val inp = TextIO.inputAll (TextIO.openIn prog)
         val tokens = (lex (0,0) (explode inp))
         val ast = parse tokens
-        val optimized_reps = ast_combine_repeated ast
-        (* val optimized_ast = ast_optimize_loop optimized_reps *)
+        val optimized_ast = optimize_full ast
         val cells = Array.array (100000, 0)
-        (* val interpret_ = interpret optimized_ast 0 *)
-        val interpret_ = interpret optimized_reps 0
+        (* val interpret_ = interpret optimized_reps 0 *)
+        val interpret_ = interpret optimized_ast 0
     in
         print ("interpret takes " ^ Time.toString (time_it (interpret_, cells)) ^ " seconds.\n")
     end
@@ -230,9 +249,9 @@ fun main_compile prog =
         val inp = TextIO.inputAll (TextIO.openIn prog)
         val tokens = (lex (0,0) (explode inp))
         val ast = parse tokens
-        val optimized_reps = ast_combine_repeated ast
+        val optimized_ast = optimize_full ast
     in
-        print (transpile_to_c optimized_reps)
+        print (transpile_to_c optimized_ast)
     end
 
 fun main ("-c"::prog::nil) = main_compile prog
